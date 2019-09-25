@@ -68,6 +68,7 @@ WebSocketsServer webSocket(81);    // create a websocket server on port 81
 
 // openweathermap
 HTTPClient owm;
+WiFiClient wclient;
 
 const char* mdnsName = "wemos"; // Domain name for the mDNS responder, connect to http://wemos.local
 
@@ -276,17 +277,17 @@ void displayHexString(const char* string) {
 void getOWMInfo() {
   OWMInfo.error = true;
   if (WiFi.isConnected()) {
-    owm.begin(owmURL);
+    owm.begin(wclient, owmURL);
     if (owm.GET()) {
       String json = owm.getString();
 //      Serial.println(json);
 //     Serial.println(json.length());
-      DynamicJsonBuffer jsonBuffer(1024);
-      JsonObject& root = jsonBuffer.parseObject(json);
-      if (root.success()) {
-        float temp = root["main"]["temp"];
+      DynamicJsonDocument doc(1024);
+      auto error = deserializeJson(doc, json);
+      if (!error) {
+        float temp = doc["main"]["temp"];
         OWMInfo.temperature = round(temp);
-        JsonObject& weather = root["weather"][0];
+        JsonObject weather = doc["weather"][0];
         strcpy(OWMInfo.description, weather["main"]);
         static char utf8buf[64];
         strcpy(utf8buf, weather["description"]);
@@ -312,11 +313,11 @@ void initOTA() {
     ArduinoOTA.onStart([]() {});
     ArduinoOTA.onEnd([]() {});
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-      display.setFont(&Lato_Medium12pt8b);
+      display.setFont(&pixel_millennium_regular5pt8b);
       display.clearDisplay();
       unsigned int realprogress = (progress / (total / 100));
-      char buffer[16];
-      sprintf(buffer, "OTA: %.2d %%", realprogress);
+      static char buffer[8];
+      sprintf(buffer, "OTA : %.2d %%", realprogress);
       displayTextCenter(buffer);
       display.display();
     });
@@ -330,7 +331,7 @@ void setup() {
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C); //initialize with the I2C addr 0x3C (128x64) - 64x48 for wemos oled
   Wire.setClock(400000);
 
-  display.setRotation(2); // 180 degrees
+  display.setRotation(0); // 180 degrees
    // show splash screen
    display.clearDisplay();
    display.drawBitmap(0, 0, wemos_logo_64x48_normal, 64, 48, WHITE);
@@ -360,6 +361,11 @@ void setup() {
     // start mDNS
     MDNS.begin(mdnsName);
     // start webserver
+    webServer.on("/orientation", HTTP_POST, []() {
+      String value = webServer.arg("value");
+      display.setRotation(value.toInt());
+     display.display();
+    });
     webServer.onNotFound(handleNotFound);
     webServer.begin();
 
