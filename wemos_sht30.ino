@@ -124,7 +124,7 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 const char* owmArcueilId = "6613168";
 const char* owmLang      = "fr"; // fr encodes accents in utf8, not easy to convert
 
-char owmURL[128];
+char owmURL[256];
 
 void initSHT() {
   SHTInfo.error = true;
