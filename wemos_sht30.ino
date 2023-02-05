@@ -10,6 +10,9 @@
 #include "wemoslogo.h"
 #include "wifilogo.h" 
 
+#include "secrets.h"
+
+
 struct OWMIcon {
   const char* names; // comma separated
   uint8_t width;
@@ -40,8 +43,6 @@ struct OWMIcon {
 
 #define AIO_SERVER      "io.adafruit.com"
 #define AIO_SERVERPORT  1883                   // use 8883 for SSL
-#define AIO_USERNAME    "delhoume"
-#define AIO_KEY         "5cefb5958805493da7dc5610a4c47eb9"
 #define TEMP_FEED       "temperature"
 #define HUMI_FEED       "humidity"
 
@@ -120,7 +121,7 @@ void configModeCallback (WiFiManager *myWiFiManager) {
   display.display();
 }
 
-const char* owmApiKey    = "a300cf2dc95e477a855786b812a4aec9";
+
 const char* owmArcueilId = "6613168";
 const char* owmLang      = "fr"; // fr encodes accents in utf8, not easy to convert
 
