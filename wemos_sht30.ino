@@ -33,7 +33,6 @@ struct OWMIcon {
 #include <ESP8266HTTPClient.h>
 #include <ESP8266mDNS.h> 
 #include <ArduinoJson.h>
-#include <FS.h>
 #include <ArduinoOTA.h>
 
 #include <WiFiUdp.h>
@@ -335,10 +334,11 @@ void displayHexString(const char* string) {
 void getOWMInfo() {
   OWMInfo.error = true;
   if (WiFi.isConnected()) {
+    Serial.println(owmURL);
     owm.begin(wclient, owmURL);
     if (owm.GET()) {
       String json = owm.getString();
-//      Serial.println(json);
+      Serial.println(json);
 //     Serial.println(json.length());
       DynamicJsonDocument doc(2048);
       auto error = deserializeJson(doc, json);
@@ -401,6 +401,8 @@ void setup() {
   initSHT();
   initOWM();
 
+Serial.println("Ok");
+
   if (WiFi.isConnected()) {
     udp.begin(localPort);
     setSyncProvider(getNtpTime);
@@ -408,8 +410,6 @@ void setup() {
 
 
     initOTA();
-    // start file system
-    SPIFFS.begin(); 
     // start webserver
     webServer.on("/orientation", HTTP_POST, []() {
       String value = webServer.arg("value");
@@ -426,39 +426,10 @@ void setup() {
       serializeJsonPretty(doc, json);
       webServer.send(200, "text/json", json);
     });
-    webServer.onNotFound(handleNotFound);
-    webServer.begin();
+       webServer.begin();
     MDNS.begin("WemosSHT");
    }
   updateSHT();
-}
-
-String getContentType(String filename){
-  if(filename.endsWith(".html")) 
-    return "text/html";
-  else if(filename.endsWith(".css")) 
-    return "text/css";
-  else if(filename.endsWith(".js")) 
-    return "application/javascript";
-  return "text/plain";
-}
-
-bool handleFileRead(String path) { // send the right file to the client (if it exists)
-//  Serial.println("handleFileRead: " + path);
-  if (path.endsWith("/")) path += "index.html";         // If a folder is requested, send the index file
-   if (SPIFFS.exists(path)) {                            // If the file exists
-      String contentType = getContentType(path);            // Get the MIME type
-      File file = SPIFFS.open(path, "r");                 // Open it
-      webServer.streamFile(file, contentType); // And send it to the client
-      file.close();                                       // Then close the file again
-      return true;
-  }
-  return false;                                         // If the file doesn't exist, return false
-}
-
-void handleNotFound() {
-  if (!handleFileRead(webServer.uri()))
-    webServer.send(404, "text/plain", "404: File Not Found");
 }
 
 uint8_t rssiToQuality(long rssi) {
@@ -512,13 +483,18 @@ void loop() {
     unsigned long currentTime = millis();
 
     if ((currentTime - lastDisplayTime) >= 4 * 1000) { // change display every 4s
+      Serial.println("Loop2");
+
        displayContents();
       lastDisplayTime = currentTime;
     }
     if ((lastUpdateTime == 0) || ((currentTime - lastUpdateTime) >= 30 * 1000)) { // check for new values every 30s
       updateSHT();
-      getOWMInfo();
-      sendMQTTValues();
+       Serial.println("Loop3");
+     getOWMInfo();
+       Serial.println("Loop4");
+     sendMQTTValues();
+      Serial.println("Loop5");
       lastUpdateTime = currentTime;
    }
 }
