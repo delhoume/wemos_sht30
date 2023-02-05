@@ -1,25 +1,34 @@
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SSD1306_wemos.h>
 
+// fontconvert.exe fonts/DigitalDisplay.ttf 12 > DigitalDisplay12.h
+//#include "DigitalDisplay12.h"
+#include "digital12.h"
 #include "pixel-millenium5.h"
 #include "LatoMedium8.h"
 #include "LatoMedium12.h"
-#include "digital12.h"
-//#include "invader.h"
 #include "wemoslogo.h"
-#include "wifilogo.h"  
+#include "wifilogo.h" 
+
+struct OWMIcon {
+  const char* names; // comma separated
+  uint8_t width;
+  uint8_t height;
+  const uint8_t* data;
+};
+
+ //#include "weathericons.h"
+#include "weathericonic.h"
 
 #include "wemos_sht3x.h"
 
 #include <ESP8266WiFi.h>
-#include <DNSServer.h>
 #include <ESP8266WebServer.h>
 #include <Adafruit_MQTT.h>
 #include <Adafruit_MQTT_Client.h>
 #include <WiFiManager.h>         //https://github.com/tzapu/WiFiManager
-#include <ESP8266mDNS.h>
 #include <ESP8266HTTPClient.h>
-#include <WebSocketsServer.h>
+#include <ESP8266mDNS.h> 
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <ArduinoOTA.h>
@@ -29,13 +38,6 @@
 
 #include <Wire.h>
 
-unsigned int localPort = 2390;      // local port to listen for UDP packets
-IPAddress timeServerIP; // time.nist.gov NTP server address
-const char* ntpServerName = "time.google.com";
-const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
-byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
-
-WiFiUDP udp;
 #define AIO_SERVER      "io.adafruit.com"
 #define AIO_SERVERPORT  1883                   // use 8883 for SSL
 #define AIO_USERNAME    "delhoume"
@@ -47,9 +49,9 @@ struct WeatherInfo {
   float temperature;
   float humidity;
   boolean error;
-  char description[16];
-  char fulldescription[32];
-  char icon[8];
+  char description[16]= {0};
+  char fulldescription[32] = {0};
+  char icon[8] = {0};
   long time;
 };
 
@@ -64,13 +66,10 @@ Adafruit_MQTT_Publish mqttTemp = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/fee
 Adafruit_MQTT_Publish mqttHum = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/humidity");
 
 ESP8266WebServer webServer(80);       // Create a webserver object that listens for HTTP request on port 80
-WebSocketsServer webSocket(81);    // create a websocket server on port 81
 
 // openweathermap
 HTTPClient owm;
 WiFiClient wclient;
-
-const char* mdnsName = "wemos"; // Domain name for the mDNS responder, connect to http://wemos.local
 
 // degree is 176 (B0)
 //fontconvert.exe Lato-Medium.ttf 12 20 255 > LatoMedium12.h
@@ -79,7 +78,9 @@ const char* mdnsName = "wemos"; // Domain name for the mDNS responder, connect t
 
 SHT3X sht30;
 
-#define OLED_RESET LED_BUILTIN
+#define SCREEN_WIDTH 64 // OLED display width, in pixels
+#define SCREEN_HEIGHT 48 // OLED display height, in pixels
+#define OLED_RESET 0  // GPIO0
 Adafruit_SSD1306 display(OLED_RESET);
 
 
@@ -102,18 +103,24 @@ inline void displayText(const char* text, uint16_t xpos, uint16_t ypos) {
   display.print(text);
 }
 
+// forward declarations
 void displayTextCenterH(const char* text, uint16_t ypos);
+void displayTextCenter(const char* str);
+void updateSHT();
+void sendMQTTValues();
+
  
 void configModeCallback (WiFiManager *myWiFiManager) {
   display.clearDisplay();
   displayWifiLogo();
   char buffer[32];
   sprintf(buffer, "SSID %s", myWiFiManager->getConfigPortalSSID().c_str());
+  display.setFont(&pixel_millennium_regular5pt8b);
   displayTextCenterH(buffer, 40);
   display.display();
 }
 
-const char* owmApiKey    = "95b2ed7cdfc0136948c0a9d499f807eb";
+const char* owmApiKey    = "a300cf2dc95e477a855786b812a4aec9";
 const char* owmArcueilId = "6613168";
 const char* owmLang      = "fr"; // fr encodes accents in utf8, not easy to convert
 
@@ -132,8 +139,56 @@ void initOWM() {
     OWMInfo.error = true;
 }
 
-void initNTP() {
-  NTPInfo.error = true;
+unsigned int localPort = 2390;      // local port to listen for UDP packets
+const char* ntpServerName = "time.google.com";
+const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
+byte packetBuffer[ NTP_PACKET_SIZE] = { 0 };
+WiFiUDP udp;
+
+void sendNTPpacket(IPAddress& address) {
+  if (WiFi.isConnected()) {
+    if (packetBuffer[0] == 0) { // it once for all
+      memset(packetBuffer, 0, NTP_PACKET_SIZE);
+      packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+      packetBuffer[1] = 0;     // Stratum, or type of clock
+      packetBuffer[2] = 6;     // Polling Interval
+      packetBuffer[3] = 0xEC;  // Peer Clock Precision
+      // 8 bytes of zero for Root Delay & Root Dispersion
+      packetBuffer[12] = 49;
+      packetBuffer[13] = 0x4E;
+      packetBuffer[14] = 49;
+      packetBuffer[15] = 52;
+    }
+    udp.beginPacket(address, 123); //NTP requests are to port 123
+    udp.write(packetBuffer, NTP_PACKET_SIZE);
+    udp.endPacket();
+  }
+}
+
+time_t getNtpTime() {
+  if (WiFi.isConnected()) {
+    IPAddress timeServerIP; // time.nist.gov NTP server address
+    WiFi.hostByName(ntpServerName, timeServerIP);
+    while (udp.parsePacket() > 0) ; // discard any previously received packets
+    sendNTPpacket(timeServerIP);
+    uint32_t beginWait = millis();
+    while (millis() - beginWait < 1500) {
+      int size = udp.parsePacket();
+      if (size >= NTP_PACKET_SIZE) {
+ //       Serial.println("Receive NTP Response");
+        udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+        unsigned long secsSince1900;
+        // convert four bytes starting at location 40 to a long integer
+        secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+        secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+        secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+        secsSince1900 |= (unsigned long)packetBuffer[43];
+        return secsSince1900 - 2208988800UL;
+      }
+    }
+  }
+//  Serial.println("No NTP Response :-(");
+  return 0; // return 0 if unable to get the time
 }
 
 /* UTF-8 to ISO-8859-1/ISO-8859-15 mapper.
@@ -263,6 +318,7 @@ size_t utf8_to_latin9(char *const output, const char *const input, const size_t 
     return (size_t)(out - (unsigned char *)output);
 }
 
+/*
 void displayHexString(const char* string) {
   int len = strlen(string);
   for (int idx = 0; idx < len; ++idx) {
@@ -273,6 +329,7 @@ void displayHexString(const char* string) {
   }
   Serial.println();
 }
+*/
 
 void getOWMInfo() {
   OWMInfo.error = true;
@@ -282,7 +339,7 @@ void getOWMInfo() {
       String json = owm.getString();
 //      Serial.println(json);
 //     Serial.println(json.length());
-      DynamicJsonDocument doc(1024);
+      DynamicJsonDocument doc(2048);
       auto error = deserializeJson(doc, json);
       if (!error) {
         float temp = doc["main"]["temp"];
@@ -292,23 +349,18 @@ void getOWMInfo() {
         static char utf8buf[64];
         strcpy(utf8buf, weather["description"]);
          utf8_to_latin9(OWMInfo.fulldescription, utf8buf, strlen(utf8buf));
- //     displayHexString(OWMInfo.fulldescription);
         strcpy(OWMInfo.icon, weather["icon"]);
-
- //       OWMInfo.time = atol(root["dt"]);
- //      Serial.println(OWMInfo.temperature);
- //      Serial.println(OWMInfo.icon);
 	      OWMInfo.error = false;
+      } else {
+        strcpy(OWMInfo.description, "json");
       }
     }
     owm.end();
   }
 }
 
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * /* payload */, size_t /* length */);
-
 void initOTA() {
-      ArduinoOTA.setHostname("WemosSHT");
+    ArduinoOTA.setHostname("WemosSHT");
     ArduinoOTA.setPassword("wemos");
     ArduinoOTA.onStart([]() {});
     ArduinoOTA.onEnd([]() {});
@@ -326,10 +378,10 @@ void initOTA() {
 }
 
 void setup() {
-  Serial.begin(115200);
+ Serial.begin(115200);
   //sht3xd.begin(0x45); // I2C address: 0x44 or 0x45
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C); //initialize with the I2C addr 0x3C (128x64) - 64x48 for wemos oled
-  Wire.setClock(400000);
+//  Wire.setClock(400000);
 
   display.setRotation(0); // 180 degrees
    // show splash screen
@@ -340,41 +392,43 @@ void setup() {
 
   WiFiManager wifiManager;
   wifiManager.setConfigPortalTimeout(120);
- // wifiManager.setDebugOutput(true);
+//  wifiManager.setDebugOutput(true);
   wifiManager.setMinimumSignalQuality(30);
   wifiManager.setAPCallback(configModeCallback);
   wifiManager.autoConnect("wemos"); //  no password
 
   initSHT();
   initOWM();
-  initNTP();
 
   if (WiFi.isConnected()) {
     udp.begin(localPort);
+    setSyncProvider(getNtpTime);
+    setSyncInterval(3600);
+
 
     initOTA();
     // start file system
     SPIFFS.begin(); 
-    // start webSockets
-    webSocket.begin();
-    webSocket.onEvent(webSocketEvent);
-    // start mDNS
-    MDNS.begin(mdnsName);
     // start webserver
     webServer.on("/orientation", HTTP_POST, []() {
       String value = webServer.arg("value");
       display.setRotation(value.toInt());
      display.display();
     });
+    webServer.on("/info", HTTP_GET, []() { // [{"value":"20.50"}]
+      const size_t capacity = JSON_ARRAY_SIZE(1) + JSON_OBJECT_SIZE(1);
+      DynamicJsonDocument doc(capacity);
+
+      JsonObject arr = doc.createNestedObject();
+      arr["value"] = SHTInfo.temperature;
+      char json[256];
+      serializeJsonPretty(doc, json);
+      webServer.send(200, "text/json", json);
+    });
     webServer.onNotFound(handleNotFound);
     webServer.begin();
-
-    getOWMInfo();
-
-    WiFi.hostByName(ntpServerName, timeServerIP);
-    sendNTPpacket(timeServerIP); 
-
-  }
+    MDNS.begin("WemosSHT");
+   }
   updateSHT();
 }
 
@@ -405,35 +459,6 @@ void handleNotFound() {
   if (!handleFileRead(webServer.uri()))
     webServer.send(404, "text/plain", "404: File Not Found");
 }
-
-// num is client id
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * /* payload */, size_t /* length */) {
-  switch (type) {
-    case WStype_DISCONNECTED:
-      break;
-    case WStype_CONNECTED:
-      break;
-    case WStype_TEXT: // always send back JSON string
-      sendWebSocketValues(num);
-      break;
-    default:
-    break;
-  }
-}
-
-//  could use ArduinoJson
-const char* json = "{\"t\":\"%.1f\",\"h\":\"%.1f\"}";
-    
-void sendWebSocketValues(uint8_t num) {
-       // send to websockets as JSON string
-       // send nothing if error
-      if (SHTInfo.error ==  false) {
-        static char buffer[32];
-        sprintf(buffer, json, SHTInfo.temperature, SHTInfo.humidity);
-//        Serial.println(buffer);
-        webSocket.sendTXT(num, buffer);
-      } 
-    } 
 
 uint8_t rssiToQuality(long rssi) {
      // -120 to 0 DBm
@@ -480,65 +505,59 @@ unsigned long lastDisplayTime = 0;
 void displayContents();
 
 void loop() {
-  // is it necessary when only publishing data ?
-    webSocket.loop();
     webServer.handleClient();
     ArduinoOTA.handle();
-
+    MDNS.update();
     unsigned long currentTime = millis();
-    
-    if ((currentTime - lastDisplayTime) >= 3000) { 
+
+    if ((currentTime - lastDisplayTime) >= 4 * 1000) { // change display every 4s
        displayContents();
       lastDisplayTime = currentTime;
     }
-    if ((currentTime - lastUpdateTime) >= 30000) { 
+    if ((lastUpdateTime == 0) || ((currentTime - lastUpdateTime) >= 30 * 1000)) { // check for new values every 30s
       updateSHT();
-     sendMQTTValues();
       getOWMInfo();
-      sendNTPpacket(timeServerIP); 
-     lastUpdateTime = currentTime;
+      sendMQTTValues();
+      lastUpdateTime = currentTime;
    }
-   checkNTP();      
-  }
-
-
-void checkNTP() {
-  if (udp.parsePacket() != 0) { 
-    udp.read(packetBuffer, NTP_PACKET_SIZE);
-    uint32_t NTPTime = (packetBuffer[40] << 24) | (packetBuffer[41] << 16) | (packetBuffer[42] << 8) | packetBuffer[43];
-    const uint32_t seventyYears = 2208988800UL;
-    // subtract seventy years:
-    uint32_t epoch = NTPTime - seventyYears; 
-    Serial.print("Epoch "); Serial.println(epoch);
-    NTPInfo.time = epoch;
-    NTPInfo.error = false;
-  } else {
- //   Serial.println("No NTP");
-  }
 }
 
-
-void sendNTPpacket(IPAddress& address) {
-  if (WiFi.isConnected()) {
-    Serial.println("Requesting NTP");
-    memset(packetBuffer, 0, NTP_PACKET_SIZE);
-    packetBuffer[0] = 0b11100011;   // LI, Version, Mode
-    udp.beginPacket(address, 123); //NTP requests are to port 123
-    udp.write(packetBuffer, NTP_PACKET_SIZE);
-    udp.endPacket();
+// Exponential moving average
+class Ema {
+public:
+	Ema(float alpha) : _alpha(alpha) {}
+	float filter(float input) {
+    if (_hasInitial) {
+		  _output = _alpha * (input - _output) + _output;
+	  } else {
+      _output = input;
+      _hasInitial = true;
+	  }
+	  return _output;
   }
-}
+  void reset() {
+    _hasInitial = true;
+  }
+private:
+	bool _hasInitial = false;
+	float _output = 0;
+	float _alpha = 0; //  Smoothing factor, in range [0,1]. Higher the value - less smoothing (higher the latest reading impact)
+};
 
 void updateSHT() {
+ static Ema emat(0.1);
+  static Ema emah(0.1);
+
   SHTInfo.error = true;
-  if (sht30.get() == 0) {
-    // bad temp read when sensor is not isolated, CALIBRATION !!
-    // nearest 0.5
-    float tempCalibration = 0.0; // -7.0
-    float humCalibration = 0.0;  // +10.0
-    SHTInfo.temperature = round((sht30.cTemp + tempCalibration) * 2.0) / 2.0;
-    SHTInfo.humidity = round(sht30.humidity  + humCalibration);
+  int error = sht30.get();
+  if (error == 0) {
+    float temp = sht30.cTemp;
+    float humi = sht30.humidity;
+      SHTInfo.temperature = emat.filter(temp);
+    SHTInfo.humidity = emah.filter(humi);
     SHTInfo.error = false;
+    Serial.println(String("temperature:") + temp + ",filtered:" + SHTInfo.temperature);
+  //Serial.println(String(",humidity:") + humi + ",fitered humidity:" + SHTInfo.humidity);
   }
 }
 
@@ -589,15 +608,6 @@ void displayTextCenter(const char* str) {
 }
 
 
-void displayOWMTemp() {
-  display.setFont(&Lato_Medium12pt8b);
-  if (OWMInfo.error == false) {
-    displayTemp(OWMInfo.temperature);
-  } else {
-    displayTextCenter("?");
-  }
-}
-
 void displayTemp(float temp) {
     static char buffer[10];
     char* buf = buffer;
@@ -611,16 +621,6 @@ void displayTemp(float temp) {
     buf[3] = 0;
     displayTextCenter(buffer);
 }
-
-struct OWMIcon {
-  const char* names; // comma separated
-  uint8_t width;
-  uint8_t height;
-  const uint8_t* data;
-};
-
-//#include "weathericons.h"
-#include "weathericonic.h"
 
 struct OWMIcon* findIcon(const char* name) {
   int numIcons = sizeof(icons_weather_iconic) / sizeof(struct OWMIcon);
@@ -640,6 +640,15 @@ struct OWMIcon* findIcon(const char* name) {
   return NULL;
 }
 
+void displayOWMTemp() {
+  display.setFont(&Lato_Medium12pt8b);
+  if (OWMInfo.error == false) {
+    displayTemp(OWMInfo.temperature);
+  } else {
+    displayTextCenter(OWMInfo.description);
+  }
+}
+
 void displayOWMIcon() {
   if (OWMInfo.error == false) {
     display.setFont(&pixel_millennium_regular5pt8b);
@@ -651,7 +660,7 @@ void displayOWMIcon() {
       displayTextCenter(OWMInfo.icon);
     }
   } else {
-    displayTextCenter("?");
+    displayTextCenter(OWMInfo.description);
   }
 }
 
@@ -662,16 +671,12 @@ Timezone CE(CEST, CET);
 TimeChangeRule *tcr;
 
 void displayNTPTime() {
-   display.setFont(&DS_DIGIB12pt7b);
-  if (NTPInfo.error == false) {
-   time_t utc = NTPInfo.time;
+  display.setFont(&DS_DIGIB12pt7b);
+   time_t utc = now();
    time_t local = CE.toLocal(utc, &tcr);
-   char buffer[32];
+   static char buffer[8];
    sprintf(buffer, "%.2d:%.2d", hour(local), minute(local));
    displayTextCenter(buffer);
-  } else {
-    displayTextCenter("??:??");
-  }
 }
 
 const char* days[] = { "Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"  };
@@ -679,16 +684,12 @@ const char* days[] = { "Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"  };
 //                          "Ao�t", "Septembre", "Octobre", "Novembre", "D�cembre" };
   
 void displayNTPDate() {
-   display.setFont(&Lato_Medium8pt8b);
-   if (NTPInfo.error == false) {
-     time_t utc = NTPInfo.time;
+    display.setFont(&Lato_Medium8pt8b);
+    time_t utc = now();
      time_t local = CE.toLocal(utc, &tcr);
      char buffer[32];
      sprintf(buffer, "%s %d", days[weekday(local) - 1], day(local)); // , monthes[month(local) -1]);
      displayTextCenter(buffer);
-  } else {
-    displayTextCenter("?");
-  }
 }
 
 const uint8_t home_width = 8;
