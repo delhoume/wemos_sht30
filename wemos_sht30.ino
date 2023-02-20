@@ -533,7 +533,7 @@ void updateSHT() {
       SHTInfo.temperature = emat.filter(temp);
     SHTInfo.humidity = emah.filter(humi);
     SHTInfo.error = false;
-    Serial.println(String("temperature:") + temp + ",filtered:" + SHTInfo.temperature);
+    Serial.println(String(F("temperature:")) + temp + ",filtered:" + SHTInfo.temperature);
   //Serial.println(String(",humidity:") + humi + ",fitered humidity:" + SHTInfo.humidity);
   }
 }
