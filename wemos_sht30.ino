@@ -12,6 +12,9 @@
 
 #include "secrets.h"
 
+#define ARDUINOTRACE_ENABLE 0  // Disable all traces
+#include <ArduinoTrace.h>
+
 
 struct OWMIcon {
   const char* names; // comma separated
@@ -175,7 +178,6 @@ time_t getNtpTime() {
     while (millis() - beginWait < 1500) {
       int size = udp.parsePacket();
       if (size >= NTP_PACKET_SIZE) {
- //       Serial.println("Receive NTP Response");
         udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
         unsigned long secsSince1900;
         // convert four bytes starting at location 40 to a long integer
@@ -187,7 +189,6 @@ time_t getNtpTime() {
       }
     }
   }
-//  Serial.println("No NTP Response :-(");
   return 0; // return 0 if unable to get the time
 }
 
@@ -334,12 +335,11 @@ void displayHexString(const char* string) {
 void getOWMInfo() {
   OWMInfo.error = true;
   if (WiFi.isConnected()) {
-    Serial.println(owmURL);
+    DUMP(owmURL);
     owm.begin(wclient, owmURL);
     if (owm.GET()) {
       String json = owm.getString();
-      Serial.println(json);
-//     Serial.println(json.length());
+     DUMP(json);
       DynamicJsonDocument doc(2048);
       auto error = deserializeJson(doc, json);
       if (!error) {
@@ -347,7 +347,7 @@ void getOWMInfo() {
         OWMInfo.temperature = round(temp);
         JsonObject weather = doc["weather"][0];
         strcpy(OWMInfo.description, weather["main"]);
-        static char utf8buf[64];
+        char utf8buf[64];
         strcpy(utf8buf, weather["description"]);
          utf8_to_latin9(OWMInfo.fulldescription, utf8buf, strlen(utf8buf));
         strcpy(OWMInfo.icon, weather["icon"]);
@@ -380,9 +380,7 @@ void initOTA() {
 
 void setup() {
  Serial.begin(115200);
-  //sht3xd.begin(0x45); // I2C address: 0x44 or 0x45
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C); //initialize with the I2C addr 0x3C (128x64) - 64x48 for wemos oled
-//  Wire.setClock(400000);
+   display.begin(SSD1306_SWITCHCAPVCC, 0x3C); //initialize with the I2C addr 0x3C (128x64) - 64x48 for wemos oled
 
   display.setRotation(0); // 180 degrees
    // show splash screen
@@ -400,8 +398,6 @@ void setup() {
 
   initSHT();
   initOWM();
-
-Serial.println("Ok");
 
   if (WiFi.isConnected()) {
     udp.begin(localPort);
@@ -483,18 +479,17 @@ void loop() {
     unsigned long currentTime = millis();
 
     if ((currentTime - lastDisplayTime) >= 4 * 1000) { // change display every 4s
-      Serial.println("Loop2");
-
+     TRACE();
        displayContents();
       lastDisplayTime = currentTime;
     }
     if ((lastUpdateTime == 0) || ((currentTime - lastUpdateTime) >= 30 * 1000)) { // check for new values every 30s
       updateSHT();
-       Serial.println("Loop3");
+      TRACE();
      getOWMInfo();
-       Serial.println("Loop4");
+      TRACE();
      sendMQTTValues();
-      Serial.println("Loop5");
+      TRACE();
       lastUpdateTime = currentTime;
    }
 }
@@ -533,7 +528,7 @@ void updateSHT() {
       SHTInfo.temperature = emat.filter(temp);
     SHTInfo.humidity = emah.filter(humi);
     SHTInfo.error = false;
-    Serial.println(String(F("temperature:")) + temp + ",filtered:" + SHTInfo.temperature);
+   // Serial.println(String(F("temperature:")) + temp + ",filtered:" + SHTInfo.temperature);
   //Serial.println(String(",humidity:") + humi + ",fitered humidity:" + SHTInfo.humidity);
   }
 }
